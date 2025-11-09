@@ -11,6 +11,9 @@ import uuid
 import gdown
 import time
 
+# ✅ Streamlit Page Configuration — MUST COME FIRST
+st.set_page_config(page_title="AI Playlist Generator", page_icon="🎧", layout="wide")
+
 # ==========================================
 # ❤️ Initialize Session State
 # ==========================================
