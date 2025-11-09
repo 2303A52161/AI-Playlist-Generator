@@ -119,8 +119,20 @@ def get_spotify_data(track_name, artist_name):
 # 🧠 Playlist Generator
 # ==========================================
 def generate_playlist(q_net, df, start_genre=None, mood=None, playlist_len=10, top_k=20):
+    """
+    Generate a playlist using the trained DQN model with genre & mood filters.
+    Prevents duplicate songs and out-of-bound index errors.
+    """
+
+    # 🎧 Apply genre filter
     if start_genre and start_genre != "Any":
-        df = df[df['genre'].str.lower() == start_genre.lower()]
+        genre_subset = df[df['genre'].str.lower() == start_genre.lower()]
+        if genre_subset.empty:
+            df = df.copy().reset_index(drop=True)  # silent fallback to full dataset
+        else:
+            df = genre_subset.copy().reset_index(drop=True)
+
+    # 🎭 Apply mood filter
     if mood and mood != "Any":
         if mood == "Energetic":
             df = df[df['energy'] > 0.7]
@@ -130,32 +142,55 @@ def generate_playlist(q_net, df, start_genre=None, mood=None, playlist_len=10, t
             df = df[df['valence'] > 0.6]
         elif mood == "Sad":
             df = df[df['valence'] < 0.3]
+        df = df.reset_index(drop=True)
 
-    df = df.reset_index(drop=True)
-    if df.empty:
-        st.error("⚠️ No songs match your filters.")
+    # 🧩 Safety check — ensure songs exist after filtering
+    n_songs = len(df)
+    if n_songs == 0:
+        st.error("⚠️ No songs match the selected genre and mood.")
         return pd.DataFrame()
 
-    idx = random.randint(0, len(df) - 1)
+    # 🪩 Start from a random song within bounds
+    idx = random.randint(0, n_songs - 1)
     cur_song = df.iloc[idx]
     playlist = [cur_song]
-    used = {idx}
+    used_indices = {idx}
 
     for _ in range(playlist_len - 1):
         state = torch.tensor(cur_song[features].values.astype(np.float32), dtype=torch.float32).unsqueeze(0)
+
         with torch.no_grad():
             q_values = q_net(state).flatten()
-            q_values += torch.rand_like(q_values) * 0.01
-        top_indices = torch.topk(q_values, min(top_k, len(df))).indices.cpu().numpy()
-        candidates = [i for i in top_indices if i not in used]
-        if not candidates:
-            break
-        next_idx = random.choice(candidates)
-        cur_song = df.iloc[next_idx]
-        playlist.append(cur_song)
-        used.add(next_idx)
+            # Trim Q-values to current df length
+            q_values = q_values[:n_songs]
+            q_values += torch.rand_like(q_values) * 0.01  # adds small randomness
 
-    return pd.DataFrame(playlist).drop_duplicates(subset=['track_name']).reset_index(drop=True)
+        k = min(top_k, n_songs)
+        topk_indices = torch.topk(q_values, k).indices.cpu().numpy().tolist()
+
+        # Remove already used indices
+        candidates = [i for i in topk_indices if i not in used_indices and i < n_songs]
+
+        if not candidates:
+            # Pick a random valid unused index safely
+            remaining = [i for i in range(n_songs) if i not in used_indices]
+            if not remaining:
+                break
+            next_idx = random.choice(remaining)
+        else:
+            next_idx = random.choice(candidates)
+
+        # ✅ Safely check bounds
+        if 0 <= next_idx < n_songs:
+            next_song = df.iloc[next_idx]
+            playlist.append(next_song)
+            used_indices.add(next_idx)
+            cur_song = next_song
+        else:
+            continue  # skip invalid ones
+
+    playlist_df = pd.DataFrame(playlist).drop_duplicates(subset=['track_name']).reset_index(drop=True)
+    return playlist_df
 
 # ==========================================
 # 🎨 Streamlit UI
