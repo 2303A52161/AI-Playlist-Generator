@@ -1,4 +1,8 @@
 import streamlit as st
+
+# ✅ Must be the first Streamlit command
+st.set_page_config(page_title="AI Playlist Generator", page_icon="🎧", layout="wide")
+
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -11,9 +15,6 @@ import uuid
 import gdown
 import time
 
-# ✅ Page Configuration (must be first Streamlit command)
-st.set_page_config(page_title="AI Playlist Generator", page_icon="🎧", layout="wide")
-
 # ==========================================
 # ❤️ Initialize Session State
 # ==========================================
@@ -21,6 +22,7 @@ if "liked_songs" not in st.session_state:
     st.session_state.liked_songs = []
 if "playlist_df" not in st.session_state:
     st.session_state.playlist_df = pd.DataFrame()
+
 
 
 # ==========================================
@@ -158,7 +160,6 @@ def generate_playlist(q_net, df, start_genre=None, mood=None, playlist_len=10, t
 # ==========================================
 # 🎨 Streamlit UI
 # ==========================================
-st.set_page_config(page_title="AI Playlist Generator", page_icon="🎧", layout="wide")
 
 st.markdown("<h1 style='text-align:center;color:#1DB954;'>🎧 AI Playlist Generator</h1>", unsafe_allow_html=True)
 st.markdown("<h4 style='text-align:center;'>Personalized Mood-Based Playlists using Reinforcement Learning + Spotify API</h4>", unsafe_allow_html=True)
