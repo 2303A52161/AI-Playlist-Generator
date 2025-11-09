@@ -50,20 +50,24 @@ def load_model_and_data():
     features = ['tempo', 'energy', 'valence', 'acousticness', 'popularity']
 
     # Load model
+    import time
+    #import gdown
+
     model_path = "trained_dqn_playlist_final_v2.pth"
-    gdrive_id = "1V8B5GRRX3rOY4BucMjukPiwTK_oLdDoa"  
+    gdrive_id = "1q8BfoClD5mjMTD1658Vf7rHJ9Mu7ihCa"  # ✅ your latest Drive model file
+
     if not os.path.exists(model_path):
-        st.warning("Downloading model from Google Drive ⏳ ...")
-        url = f"https://drive.google.com/uc?id={gdrive_id}"
-        gdown.download(url, model_path, quiet=False)
-        st.success("✅ Model downloaded successfully!")
-
-    checkpoint = torch.load(model_path, map_location="cpu")
-    q_net = DQN(len(checkpoint['features']), len(df))
-    q_net.load_state_dict(checkpoint['q_net_state_dict'], strict=False)
-    q_net.eval()
-
-    st.success("✅ Model and dataset loaded successfully.")
+        with st.spinner("⏳ Downloading trained model from Google Drive... This may take a minute."):
+           try:
+              url = f"https://drive.google.com/uc?id={gdrive_id}"
+              gdown.download(url, model_path, quiet=False)
+              time.sleep(2)  # Small delay to show progress
+              st.success("✅ Model downloaded successfully!")
+           except Exception as e:
+              st.error(f"❌ Failed to download model: {e}")
+              st.stop()
+    else:
+        st.info("📁 Model file found locally — skipping download.")
     return q_net, df, features
 
 
