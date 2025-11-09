@@ -1,7 +1,7 @@
 streamlit==1.38.0
-torch==2.5.1
-pandas==2.2.2
-numpy==1.26.4
-spotipy==2.23.0
-requests==2.31.0
-gdown==5.1.0
+torch==2.5.0
+pandas
+numpy
+spotipy
+gdown
+
