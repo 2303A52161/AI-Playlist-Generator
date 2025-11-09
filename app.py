@@ -11,7 +11,7 @@ import uuid
 import gdown
 import time
 
-# ✅ Streamlit Page Configuration — MUST COME FIRST
+# ✅ Page Configuration (must be first Streamlit command)
 st.set_page_config(page_title="AI Playlist Generator", page_icon="🎧", layout="wide")
 
 # ==========================================
@@ -21,6 +21,7 @@ if "liked_songs" not in st.session_state:
     st.session_state.liked_songs = []
 if "playlist_df" not in st.session_state:
     st.session_state.playlist_df = pd.DataFrame()
+
 
 # ==========================================
 # 🎧 DQN Model Definition
