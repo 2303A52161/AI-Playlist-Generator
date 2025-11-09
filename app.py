@@ -9,6 +9,8 @@ import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import uuid
 import gdown
+import time
+
 # ==========================================
 # ❤️ Initialize Session State
 # ==========================================
@@ -40,39 +42,48 @@ class DQN(nn.Module):
 # ==========================================
 @st.cache_resource
 def load_model_and_data():
-    # Load CSV
     csv_path = "spotify_clean_subset.csv"
-    if not os.path.exists(csv_path):
-        st.error("❌ 'spotify_clean_subset.csv' file is missing.")
-        st.stop()
+    model_path = "trained_dqn_playlist_final_v2.pth"
+    gdrive_id = "1q8BfoClD5mjMTD1658Vf7rHJ9Mu7ihCa"
 
+    # ✅ Load dataset
+    if not os.path.exists(csv_path):
+        st.error("❌ 'spotify_clean_subset.csv' file is missing in your app directory.")
+        st.stop()
     df = pd.read_csv(csv_path)
     features = ['tempo', 'energy', 'valence', 'acousticness', 'popularity']
 
-    # Load model
-    import time
-    #import gdown
-
-    model_path = "trained_dqn_playlist_final_v2.pth"
-    gdrive_id = "1q8BfoClD5mjMTD1658Vf7rHJ9Mu7ihCa"  # ✅ your latest Drive model file
-
+    # ✅ Download model if missing
     if not os.path.exists(model_path):
         with st.spinner("⏳ Downloading trained model from Google Drive... This may take a minute."):
-           try:
-              url = f"https://drive.google.com/uc?id={gdrive_id}"
-              gdown.download(url, model_path, quiet=False)
-              time.sleep(2)  # Small delay to show progress
-              st.success("✅ Model downloaded successfully!")
-           except Exception as e:
-              st.error(f"❌ Failed to download model: {e}")
-              st.stop()
+            try:
+                url = f"https://drive.google.com/uc?id={gdrive_id}"
+                gdown.download(url, model_path, quiet=False)
+                time.sleep(2)
+                st.success("✅ Model downloaded successfully!")
+            except Exception as e:
+                st.error(f"❌ Failed to download model: {e}")
+                st.stop()
     else:
-        st.info("📁 Model file found locally — skipping download.")
+        st.info("📁 Model found locally — skipping download.")
+
+    # ✅ Load the model safely
+    try:
+        checkpoint = torch.load(model_path, map_location="cpu")
+        q_net = DQN(len(features), len(df))
+        if 'q_net_state_dict' in checkpoint:
+            q_net.load_state_dict(checkpoint['q_net_state_dict'], strict=False)
+        else:
+            st.warning("⚠️ 'q_net_state_dict' missing in checkpoint — using random weights.")
+        q_net.eval()
+    except Exception as e:
+        st.error(f"❌ Failed to load model: {e}")
+        st.stop()
+
+    st.success("✅ Model and dataset loaded successfully.")
     return q_net, df, features
 
-
-
-# Load model and data once
+# ✅ Load model and data
 q_net, df, features = load_model_and_data()
 
 # ==========================================
@@ -99,26 +110,11 @@ def get_spotify_data(track_name, artist_name):
     return {"cover_url": None, "preview_url": None, "spotify_url": None}
 
 # ==========================================
-# 🧠 Helper Functions
+# 🧠 Playlist Generator
 # ==========================================
-def get_state(song):
-    return torch.tensor(song[features].values.astype(np.float32), dtype=torch.float32).unsqueeze(0)
-
 def generate_playlist(q_net, df, start_genre=None, mood=None, playlist_len=10, top_k=20):
-    """
-    Generate a playlist using the trained DQN model with genre & mood filters.
-    Prevents duplicate songs and index-out-of-bound errors.
-    """
-
-    # 🎧 Apply genre filter
     if start_genre and start_genre != "Any":
-        genre_subset = df[df['genre'].str.lower() == start_genre.lower()]
-        if genre_subset.empty:
-            st.warning(f"⚠️ No tracks found for genre '{start_genre}'. Using full dataset.")
-        else:
-            df = genre_subset.reset_index(drop=True)
-
-    # 🎭 Apply mood filter
+        df = df[df['genre'].str.lower() == start_genre.lower()]
     if mood and mood != "Any":
         if mood == "Energetic":
             df = df[df['energy'] > 0.7]
@@ -130,59 +126,30 @@ def generate_playlist(q_net, df, start_genre=None, mood=None, playlist_len=10, t
             df = df[df['valence'] < 0.3]
 
     df = df.reset_index(drop=True)
-    n_songs = len(df)
-    if n_songs == 0:
-        st.error("⚠️ No songs match the selected filters.")
+    if df.empty:
+        st.error("⚠️ No songs match your filters.")
         return pd.DataFrame()
 
-    # 🎵 Start with a random song
-    idx = random.randint(0, n_songs - 1)
+    idx = random.randint(0, len(df) - 1)
     cur_song = df.iloc[idx]
     playlist = [cur_song]
-    used_indices = {idx}
+    used = {idx}
 
     for _ in range(playlist_len - 1):
-        # Prepare state vector safely
-        state = torch.tensor(
-            cur_song[features].values.astype(np.float32),
-            dtype=torch.float32
-        ).unsqueeze(0)
-
-        # Predict Q-values and add slight randomness for exploration
+        state = torch.tensor(cur_song[features].values.astype(np.float32), dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             q_values = q_net(state).flatten()
-            q_values += torch.rand_like(q_values) * 0.01  # adds variety
-
-        k = min(top_k, n_songs)
-        topk_indices = torch.topk(q_values, k).indices.cpu().numpy()
-
-        # ⚡ Only keep valid indices
-        topk_indices = [i for i in topk_indices if 0 <= i < n_songs]
-        candidates = [i for i in topk_indices if i not in used_indices]
-
-        # Handle out-of-bound or exhausted candidate cases
+            q_values += torch.rand_like(q_values) * 0.01
+        top_indices = torch.topk(q_values, min(top_k, len(df))).indices.cpu().numpy()
+        candidates = [i for i in top_indices if i not in used]
         if not candidates:
-            remaining = list(set(range(n_songs)) - used_indices)
-            if not remaining:
-                break  # no more songs left
-            next_idx = random.choice(remaining)
-        else:
-            next_idx = random.choice(candidates)
+            break
+        next_idx = random.choice(candidates)
+        cur_song = df.iloc[next_idx]
+        playlist.append(cur_song)
+        used.add(next_idx)
 
-        # ✅ Double-check that index is valid before accessing
-        if 0 <= next_idx < n_songs:
-            next_song = df.iloc[next_idx]
-            playlist.append(next_song)
-            used_indices.add(next_idx)
-            cur_song = next_song
-        else:
-            continue  # skip invalid index safely
-
-    # ✅ Remove duplicates by track name
-    playlist_df = pd.DataFrame(playlist).drop_duplicates(subset=['track_name']).reset_index(drop=True)
-    return playlist_df
-
-
+    return pd.DataFrame(playlist).drop_duplicates(subset=['track_name']).reset_index(drop=True)
 
 # ==========================================
 # 🎨 Streamlit UI
@@ -200,113 +167,77 @@ top_k = st.sidebar.slider("Exploration (Top-K Sampling)", 5, 50, 20)
 start_genre = st.sidebar.selectbox("Preferred Genre", ["Any"] + sorted(df['genre'].unique().tolist()))
 mood = st.sidebar.selectbox("Select Mood 🎭", ["Any", "Happy", "Calm", "Energetic", "Sad"])
 
-# Generate Button
 if st.button("✨ Generate Playlist"):
-    st.session_state.playlist_df = generate_playlist(q_net, df, start_genre=start_genre, mood=mood, playlist_len=playlist_len, top_k=top_k)
+    st.session_state.playlist_df = generate_playlist(q_net, df, start_genre, mood, playlist_len, top_k)
     st.success("✅ Playlist Generated Successfully!")
 
 # ==========================================
-# 🎶 Display Generated Playlist (Fixed Likes)
+# 🎶 Display Playlist + Likes
 # ==========================================
 if not st.session_state.playlist_df.empty:
     st.markdown("### 🎧 Generated Playlist")
-    
     for i, row in st.session_state.playlist_df.iterrows():
         meta = get_spotify_data(row['track_name'], row['artist_name'])
         cover = meta["cover_url"] or "https://via.placeholder.com/100x100?text=No+Cover"
-        
-        # Unique key based on song + index
         song_key = f"{row['track_name']}_{i}"
-        
+
         with st.container():
             cols = st.columns([1, 3, 1])
-            
             with cols[0]:
                 st.image(cover, width=90)
-            
             with cols[1]:
                 st.markdown(f"**{row['track_name']}**  \n*{row['artist_name']}*  \n🎵 *{row['genre']}*")
-                
-                # Play audio preview or Spotify embed
                 if meta["preview_url"]:
                     st.audio(meta["preview_url"], format="audio/mp3")
                 elif meta["spotify_url"]:
                     track_id = meta["spotify_url"].split("/")[-1]
-                    embed_html = f"""
+                    st.markdown(f"""
                     <iframe src="https://open.spotify.com/embed/track/{track_id}"
                             width="100%" height="80" frameborder="0"
                             allowtransparency="true" allow="encrypted-media"></iframe>
-                    """
-                    st.markdown(embed_html, unsafe_allow_html=True)
-                else:
-                    st.info("🎧 No preview or embed available.")
-            
+                    """, unsafe_allow_html=True)
             with cols[2]:
-                like_button = st.button("❤️ Like", key=f"like_{song_key}")
-                if like_button:
-                    liked_entry = {
-                        "track": row['track_name'],
-                        "artist": row['artist_name'],
-                        "spotify_url": meta["spotify_url"]
-                    }
-                    # Prevent duplicates
-                    if liked_entry not in st.session_state.liked_songs:
-                        st.session_state.liked_songs.append(liked_entry)
+                if st.button("❤️ Like", key=f"like_{song_key}"):
+                    entry = {"track": row['track_name'], "artist": row['artist_name'], "spotify_url": meta["spotify_url"]}
+                    if entry not in st.session_state.liked_songs:
+                        st.session_state.liked_songs.append(entry)
                         st.toast(f"💖 Added {row['track_name']} to Liked Songs!")
-                
                 if meta["spotify_url"]:
                     st.markdown(f"[🔗 Open in Spotify]({meta['spotify_url']})")
 
-
 # ==========================================
-# 💖 Display Liked Songs
+# 💖 Liked Songs
 # ==========================================
 if st.session_state.liked_songs:
     st.markdown("---")
     st.markdown("### 💖 My Liked Songs")
-    for song in st.session_state.liked_songs:
-        st.markdown(f"• **[{song['track']}]({song['spotify_url']})** — *{song['artist']}*")
+    for s in st.session_state.liked_songs:
+        st.markdown(f"• **[{s['track']}]({s['spotify_url']})** — *{s['artist']}*")
 
     if st.button("🧹 Clear Liked Songs"):
         st.session_state.liked_songs.clear()
-        st.success("Cleared liked songs list!")
+        st.success("✅ Liked songs cleared!")
 
 # ==========================================
-# 🔍 Spotify Search Section
+# 🔍 Search Section
 # ==========================================
 st.markdown("---")
 st.markdown("## 🔍 Search Songs on Spotify")
 
-search_query = st.text_input("Type a song or artist name", placeholder="e.g., Blinding Lights or Arijit Singh")
-
+query = st.text_input("Search a song or artist", placeholder="e.g., Blinding Lights or Arijit Singh")
 if st.button("🔎 Search Spotify"):
-    if search_query.strip():
-        results = sp.search(q=search_query, limit=5, type="track")
-        tracks = results["tracks"]["items"]
-
-        if len(tracks) == 0:
-            st.warning("No songs found. Try another search!")
-        else:
-            for track in tracks:
-                track_name = track["name"]
-                artist = track["artists"][0]["name"]
-                album = track["album"]["name"]
-                url = track["external_urls"]["spotify"]
-                cover = track["album"]["images"][0]["url"] if track["album"]["images"] else "https://via.placeholder.com/150"
-
-                embed_html = f"""
-                <iframe src="https://open.spotify.com/embed/track/{track['id']}"
-                        width="100%" height="80" frameborder="0"
-                        allowtransparency="true" allow="encrypted-media"></iframe>
-                """
-
-                with st.container():
-                    cols = st.columns([1, 3])
-                    with cols[0]:
-                        st.image(cover, width=100)
-                    with cols[1]:
-                        st.markdown(f"**{track_name}** — *{artist}*  \n💿 {album}")
-                        st.markdown(embed_html, unsafe_allow_html=True)
+    if query.strip():
+        results = sp.search(q=query, limit=5, type="track")
+        for track in results["tracks"]["items"]:
+            st.markdown(f"**{track['name']}** — *{track['artists'][0]['name']}*")
+            cover = track["album"]["images"][0]["url"] if track["album"]["images"] else None
+            if cover:
+                st.image(cover, width=100)
+            st.markdown(f"""
+            <iframe src="https://open.spotify.com/embed/track/{track['id']}"
+                    width="100%" height="80" frameborder="0"
+                    allowtransparency="true" allow="encrypted-media"></iframe>
+            """, unsafe_allow_html=True)
     else:
         st.warning("Please enter a search query.")
 
